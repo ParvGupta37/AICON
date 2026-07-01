@@ -4,7 +4,7 @@
  * Authentication uses a JWT stored in localStorage.
  */
 
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_BACKEND_API_URL || 'https://aicon-0vso.onrender.com';
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
 

@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { getToken, getCurrentUser } from '../lib/apiClient';
 
-const API_BASE = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_BACKEND_API_URL || 'https://aicon-0vso.onrender.com';
 
 interface NewsArticle {
   id: number;
