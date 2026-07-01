@@ -25,7 +25,8 @@ import {
   Download,
   RefreshCw
 } from 'lucide-react';
-import { getCurrentUser, reportsApi } from '../lib/apiClient';
+import { reportsApi } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 
 function DashboardPage() {
@@ -39,9 +40,21 @@ function DashboardPage() {
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showRecommendations, setShowRecommendations] = useState(false);
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = React.useState<{ full_name?: string; email?: string } | null>(null);
   const userDisplayName = currentUser?.full_name || 'User';
   const userEmail = currentUser?.email || 'user@example.com';
+
+  // Load current user from Supabase session
+  React.useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setCurrentUser({
+          full_name: (user.user_metadata?.full_name as string) ?? '',
+          email: user.email ?? '',
+        });
+      }
+    });
+  }, []);
 
   // State for real data from Supabase
   const [analysisData, setAnalysisData] = useState<any>(null);
@@ -88,12 +101,7 @@ function DashboardPage() {
       setLoading(true);
       setError(null);
 
-      const user = getCurrentUser();
-      if (!user) {
-        setError('User not authenticated. Please log in again.');
-        return;
-      }
-
+      // reportsApi.getReports() now queries Supabase Postgres directly
       const complianceData = await reportsApi.getReports();
 
       if (complianceData && complianceData.length > 0) {

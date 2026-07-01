@@ -1,73 +1,21 @@
-import sqlite3
 import os
+from supabase import create_client, Client
+from dotenv import load_dotenv
 
-# The database lives right inside the backend directory — fully visible!
-DB_PATH = os.path.join(os.path.dirname(__file__), "aicon.db")
+load_dotenv()
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-def get_db() -> sqlite3.Connection:
-    """Return a new SQLite connection with row_factory for dict-like access."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")   # safer concurrent access
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env")
 
+# Admin client — uses service role key, bypasses RLS.
+# Only use this in the backend, never expose to frontend.
+def get_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-def init_db():
-    """Create all tables if they don't already exist."""
-    conn = get_db()
-    cur = conn.cursor()
+# Single shared instance (safe for FastAPI since supabase-py is stateless per request)
+supabase_admin: Client = get_supabase()
 
-    cur.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id          TEXT PRIMARY KEY,
-            email       TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            full_name   TEXT NOT NULL DEFAULT '',
-            created_at  TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS uploaded_files (
-            id            TEXT PRIMARY KEY,
-            user_id       TEXT NOT NULL REFERENCES users(id),
-            original_name TEXT NOT NULL,
-            stored_path   TEXT NOT NULL,
-            created_at    TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS compliance_reports (
-            id              TEXT PRIMARY KEY,
-            user_id         TEXT NOT NULL REFERENCES users(id),
-            file_name       TEXT,
-            project_name    TEXT,
-            industry        TEXT,
-            description     TEXT,
-            report          TEXT,
-            soc2_score      INTEGER,
-            gdpr_score      INTEGER,
-            hipaa_score     INTEGER,
-            pci_score       INTEGER,
-            critical_issues INTEGER,
-            moderate_issues INTEGER,
-            low_issues      INTEGER,
-            recommendations TEXT,
-            created_at      TEXT NOT NULL
-        );
-    """)
-
-    # Ensure any new columns are added if the DB already exists
-    for col_name, col_type in [
-        ("pci_score", "INTEGER"),
-        ("critical_issues", "INTEGER"),
-        ("moderate_issues", "INTEGER"),
-        ("low_issues", "INTEGER")
-    ]:
-        try:
-            cur.execute(f"ALTER TABLE compliance_reports ADD COLUMN {col_name} {col_type}")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-
-    conn.commit()
-    conn.close()
-    print(f"✅ SQLite DB ready at: {DB_PATH}")
+print("✅ Supabase admin client initialised")

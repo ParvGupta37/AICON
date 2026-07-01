@@ -23,7 +23,8 @@ import {
   Loader2,
   FolderOpen
 } from 'lucide-react';
-import { getCurrentUser, apiFetch } from '../lib/apiClient';
+import { reportsApi, ComplianceReport } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 interface ComplianceReport {
   id: string;
@@ -45,10 +46,21 @@ interface ComplianceReport {
 
 function CertificationsPage() {
   const navigate = useNavigate();
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = useState<{ email?: string; full_name?: string } | null>(null);
   const userDisplayName = currentUser?.full_name || 'User';
   const userEmail = currentUser?.email || 'user@example.com';
-  const userInitials = userDisplayName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+  const userInitials = userDisplayName.split(' ').filter(Boolean).map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setCurrentUser({
+          email: user.email ?? '',
+          full_name: (user.user_metadata?.full_name as string) ?? '',
+        });
+      }
+    });
+  }, []);
 
   const [activeTab, setActiveTab] = useState('Certifications');
   const [selectedFramework, setSelectedFramework] = useState('SOC 2 Type II');
@@ -93,7 +105,7 @@ function CertificationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<ComplianceReport[]>('/reports');
+      const data = await reportsApi.getReports();
       setReports(data || []);
       if (data && data.length > 0) {
         setSelectedReportId(data[0].id);

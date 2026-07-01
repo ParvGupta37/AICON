@@ -27,7 +27,8 @@ import {
   FileCheck2,
   RefreshCw
 } from 'lucide-react';
-import { getCurrentUser, storageApi, apiFetch } from '../lib/apiClient';
+import { getCurrentUserAsync, storageApi, apiFetch, reportsApi, ComplianceReport } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 interface ComplianceReport {
   id: string;
@@ -49,9 +50,21 @@ interface ComplianceReport {
 
 function DocumentationReportsPage() {
   const navigate = useNavigate();
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = React.useState<{ full_name?: string; email?: string } | null>(null);
   const userDisplayName = currentUser?.full_name || 'User';
   const userEmail = currentUser?.email || 'user@example.com';
+
+  // Load user from Supabase
+  React.useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setCurrentUser({
+          full_name: (user.user_metadata?.full_name as string) ?? '',
+          email: user.email ?? '',
+        });
+      }
+    });
+  }, []);
   const [activeTab, setActiveTab] = useState('Documentation & Reports');
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -93,18 +106,12 @@ function DocumentationReportsPage() {
     { id: 3, title: 'Task completed', message: 'Data encryption policy has been updated', time: '1 day ago', type: 'success' }
   ];
 
-  // Fetch user's reports from backend
+  // Fetch user's reports directly from Supabase Postgres
   const fetchReports = async () => {
     setLoading(true);
     setError(null);
     try {
-      const user = getCurrentUser();
-      if (!user) {
-        setError('You must be logged in to view documentation.');
-        setLoading(false);
-        return;
-      }
-      const data = await apiFetch('/reports');
+      const data = await reportsApi.getReports();
       setReports(data || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load documents.');
@@ -157,39 +164,33 @@ function DocumentationReportsPage() {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    const user = getCurrentUser();
-    if (!user) {
-      alert('User not authenticated. Please log in again.');
-      return;
-    }
-
     setIsUploading(true);
     setUploadStatus('Uploading file...');
 
     try {
       for (const file of files) {
-        // Step 1: Upload the file
+        // Step 1: Upload directly to Supabase Storage
         setUploadStatus(`Uploading ${file.name}...`);
-        const uploadResult = await storageApi.uploadFile(file);
+        const { storagePath, fileName } = await storageApi.uploadFile(file);
 
-        // Step 2: Trigger AI Analysis
+        // Step 2: Trigger AI Analysis via backend
         setUploadStatus(`Analyzing compliance in ${file.name}...`);
-        const cleanedName = file.name.replace(/\.[^/.]+$/, ""); // strip extension for project name
-        
+        const cleanedName = file.name.replace(/\.[^/.]+$/, '');
+
         await apiFetch('/analyze-project', {
           method: 'POST',
           body: JSON.stringify({
             projectName: cleanedName,
-            industry: 'SaaS', // default fallback
+            industry: 'SaaS',
             description: `Uploaded from Document Manager on ${new Date().toLocaleDateString()}`,
-            filePath: uploadResult.stored_path,
-            user_id: user.id
-          })
+            storagePath,
+            fileName,
+          }),
         });
       }
 
       setUploadStatus('Analysis complete!');
-      // Refresh reports list
+      // Refresh reports list from Supabase
       await fetchReports();
     } catch (err: any) {
       console.error(err);

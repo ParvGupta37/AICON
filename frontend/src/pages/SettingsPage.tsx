@@ -36,14 +36,25 @@ import {
   Calendar,
   Activity
 } from 'lucide-react';
-import { getCurrentUser } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 function SettingsPage() {
   const navigate = useNavigate();
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = useState<{ email?: string; full_name?: string } | null>(null);
   const userDisplayName = currentUser?.full_name || 'User';
   const userEmail = currentUser?.email || 'user@example.com';
-  const userInitials = userDisplayName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+  const userInitials = userDisplayName.split(' ').filter(Boolean).map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setCurrentUser({
+          email: user.email ?? '',
+          full_name: (user.user_metadata?.full_name as string) ?? '',
+        });
+      }
+    });
+  }, []);
 
   const [activeTab, setActiveTab] = useState('Settings');
   const [activeSettingsTab, setActiveSettingsTab] = useState('Team');

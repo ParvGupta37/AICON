@@ -23,7 +23,8 @@ import {
   Info,
   Loader2
 } from 'lucide-react';
-import { getToken, getCurrentUser } from '../lib/apiClient';
+import { getToken } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 const API_BASE = import.meta.env.VITE_BACKEND_API_URL || 'https://aicon-0vso.onrender.com';
 
@@ -44,9 +45,20 @@ interface NewsArticle {
 
 function AlertsUpdatesPage() {
   const navigate = useNavigate();
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = useState<{ email?: string; full_name?: string } | null>(null);
   const userDisplayName = currentUser?.full_name || 'User';
   const userEmail = currentUser?.email || 'user@example.com';
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setCurrentUser({
+          email: user.email ?? '',
+          full_name: (user.user_metadata?.full_name as string) ?? '',
+        });
+      }
+    });
+  }, []);
   const [activeTab, setActiveTab] = useState('Alerts & Updates');
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -91,7 +103,7 @@ function AlertsUpdatesPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const token = getToken();
+      const token = await getToken();
       if (!token) {
         setError('You must be logged in to view compliance news.');
         setIsLoading(false);

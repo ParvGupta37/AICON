@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Mail, Lock, User, Eye, EyeOff } from 'lucide-react';
-import { authApi } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 function AuthPage() {
   const navigate = useNavigate();
@@ -34,10 +34,19 @@ function AuthPage() {
           setLoading(false);
           return;
         }
-        await authApi.signup(formData.email, formData.password, formData.name);
+        const { error } = await supabase.auth.signUp({
+          email: formData.email,
+          password: formData.password,
+          options: { data: { full_name: formData.name } },
+        });
+        if (error) throw new Error(error.message);
         navigate('/setup');
       } else {
-        await authApi.login(formData.email, formData.password);
+        const { error } = await supabase.auth.signInWithPassword({
+          email: formData.email,
+          password: formData.password,
+        });
+        if (error) throw new Error(error.message);
         const projectData = localStorage.getItem('projectData');
         navigate(projectData ? '/dashboard' : '/setup');
       }

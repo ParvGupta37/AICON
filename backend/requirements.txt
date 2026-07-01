@@ -5,6 +5,6 @@ PyPDF2
 python-dotenv
 langchain
 langchain-cohere
-python-jose[cryptography]
-passlib[bcrypt]
 python-multipart
+supabase
+httpx

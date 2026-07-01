@@ -1,25 +1,23 @@
 import os
 import re
-import uuid
-import shutil
-import PyPDF2
 import requests as http_requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-import bcrypt
-from jose import JWTError, jwt
 
 from langchain_cohere import ChatCohere
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSequence
 
-from database import init_db, get_db
+from database import supabase_admin
+from utils.supabase_utils import (
+    get_file_bytes_from_storage,
+    read_file_content_from_bytes,
+    save_report_to_supabase,
+)
 
 # ─────────────────────────────────────────────
 # Config
@@ -27,54 +25,31 @@ from database import init_db, get_db
 load_dotenv()
 
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
-JWT_SECRET     = os.getenv("JWT_SECRET", "changeme-use-a-long-random-string")
-JWT_ALGORITHM  = "HS256"
-JWT_EXPIRE_DAYS = 7
 NEWS_API_KEY   = os.getenv("NEWS_API_KEY", "")
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
 # ─────────────────────────────────────────────
-# Auth helpers
+# Auth helper — validates Supabase JWT
 # ─────────────────────────────────────────────
 
-def hash_password(plain: str) -> str:
-    pwd_bytes = plain.encode('utf-8')
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(pwd_bytes, salt)
-    return hashed.decode('utf-8')
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    pwd_bytes = plain.encode('utf-8')
-    hashed_bytes = hashed.encode('utf-8')
-    return bcrypt.checkpw(pwd_bytes, hashed_bytes)
-
-
-def create_token(user_id: str, email: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRE_DAYS)
-    return jwt.encode(
-        {"sub": user_id, "email": email, "exp": expire},
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM,
-    )
-
-
-def decode_token(token: str) -> dict:
-    try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-
-def get_current_user(authorization: str = Header(None)):
-    """FastAPI dependency — extracts user_id from Bearer token."""
+def get_current_user(authorization: str = Header(None)) -> dict:
+    """FastAPI dependency — validates the Supabase JWT from the Authorization header."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing auth token")
+        raise HTTPException(status_code=401, detail="Missing or invalid auth token")
     token = authorization.split(" ", 1)[1]
-    payload = decode_token(token)
-    return {"user_id": payload["sub"], "email": payload["email"]}
+    try:
+        user_response = supabase_admin.auth.get_user(token)
+        user = user_response.user
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return {
+            "user_id": user.id,
+            "email": user.email,
+            "full_name": (user.user_metadata or {}).get("full_name", ""),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Token validation failed: {exc}")
 
 
 # ─────────────────────────────────────────────
@@ -117,12 +92,12 @@ compliance_chain: RunnableSequence = compliance_prompt | llm
 # ─────────────────────────────────────────────
 # FastAPI app
 # ─────────────────────────────────────────────
-app = FastAPI(title="AICON Backend", version="2.0.0")
+app = FastAPI(title="AICON Backend", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://inspiring-taffy-0b1b22.netlify.app",
+        "https://aicon-bay-seven.vercel.app",
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
@@ -137,35 +112,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve uploaded files statically (optional — for direct URL access)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-
 
 # ─────────────────────────────────────────────
 # Pydantic request models
 # ─────────────────────────────────────────────
-class SignupRequest(BaseModel):
-    email: str
-    password: str
-    full_name: str = ""
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
 class AnalysisRequest(BaseModel):
-    filePath: str        # relative path returned by /upload-file
+    storagePath: str        # Supabase Storage path returned after frontend upload
+    fileName: str           # original filename (for display)
     projectName: str
     industry: str
-    user_id: str
-    description: str
+    description: str = ""
 
 
 class ChatRequest(BaseModel):
@@ -175,147 +131,23 @@ class ChatRequest(BaseModel):
 
 # ─────────────────────────────────────────────
 # Auth endpoints
+# Auth is now handled fully by Supabase on the frontend.
+# The backend only exposes /auth/me for convenience.
 # ─────────────────────────────────────────────
-@app.post("/auth/signup")
-def signup(req: SignupRequest):
-    db = get_db()
-    try:
-        existing = db.execute(
-            "SELECT id FROM users WHERE email = ?", (req.email,)
-        ).fetchone()
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already registered")
-
-        user_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        db.execute(
-            "INSERT INTO users (id, email, password_hash, full_name, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, req.email, hash_password(req.password), req.full_name, now),
-        )
-        db.commit()
-        token = create_token(user_id, req.email)
-        return {
-            "token": token,
-            "user": {"id": user_id, "email": req.email, "full_name": req.full_name},
-        }
-    finally:
-        db.close()
-
-
-@app.post("/auth/login")
-def login(req: LoginRequest):
-    db = get_db()
-    try:
-        row = db.execute(
-            "SELECT id, email, password_hash, full_name FROM users WHERE email = ?",
-            (req.email,),
-        ).fetchone()
-        if not row or not verify_password(req.password, row["password_hash"]):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-
-        token = create_token(row["id"], row["email"])
-        return {
-            "token": token,
-            "user": {"id": row["id"], "email": row["email"], "full_name": row["full_name"]},
-        }
-    finally:
-        db.close()
-
 
 @app.get("/auth/me")
 def me(current_user: dict = Depends(get_current_user)):
-    db = get_db()
-    try:
-        row = db.execute(
-            "SELECT id, email, full_name, created_at FROM users WHERE id = ?",
-            (current_user["user_id"],),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="User not found")
-        return dict(row)
-    finally:
-        db.close()
-
-
-# ─────────────────────────────────────────────
-# File upload endpoint
-# ─────────────────────────────────────────────
-@app.post("/upload-file")
-async def upload_file(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
-):
-    """Upload a compliance file. Saves to disk and records in DB."""
-    user_id = current_user["user_id"]
-
-    # Build a unique safe filename
-    ext = os.path.splitext(file.filename or "file")[1].lower()
-    stored_name = f"{uuid.uuid4()}{ext}"
-    stored_path = os.path.join(UPLOAD_DIR, stored_name)
-
-    try:
-        with open(stored_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File save failed: {e}")
-
-    # Record in DB
-    file_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    db = get_db()
-    try:
-        db.execute(
-            "INSERT INTO uploaded_files (id, user_id, original_name, stored_path, created_at) VALUES (?, ?, ?, ?, ?)",
-            (file_id, user_id, file.filename, stored_path, now),
-        )
-        db.commit()
-    finally:
-        db.close()
-
+    """Return the current user's profile from the Supabase token."""
     return {
-        "id": file_id,
-        "original_name": file.filename,
-        "stored_path": stored_path,   # used as filePath in /analyze-project
+        "id": current_user["user_id"],
+        "email": current_user["email"],
+        "full_name": current_user["full_name"],
     }
-
-
-@app.delete("/upload-file/{file_id}")
-def delete_file(file_id: str, current_user: dict = Depends(get_current_user)):
-    db = get_db()
-    try:
-        row = db.execute(
-            "SELECT stored_path, user_id FROM uploaded_files WHERE id = ?", (file_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="File not found")
-        if row["user_id"] != current_user["user_id"]:
-            raise HTTPException(status_code=403, detail="Not your file")
-
-        # Delete from disk
-        if os.path.exists(row["stored_path"]):
-            os.remove(row["stored_path"])
-
-        db.execute("DELETE FROM uploaded_files WHERE id = ?", (file_id,))
-        db.commit()
-        return {"status": "deleted"}
-    finally:
-        db.close()
 
 
 # ─────────────────────────────────────────────
 # Compliance analysis endpoint
 # ─────────────────────────────────────────────
-def read_file_content(file_path: str) -> str:
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext == ".pdf":
-        with open(file_path, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-    elif ext in [".txt", ".md", ".tsx", ".js", ".py", ".html", ".ts", ".json", ".yaml", ".yml"]:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    raise Exception(f"Unsupported file type: {ext}")
-
 
 def parse_scores_and_recommendations(text: str) -> dict:
     def extract_score(label):
@@ -342,59 +174,45 @@ def parse_scores_and_recommendations(text: str) -> dict:
     }
 
 
-def save_report(user_id, file_name, project_name, industry, description, report, scores):
-    db = get_db()
-    try:
-        db.execute(
-            """INSERT INTO compliance_reports
-               (id, user_id, file_name, project_name, industry, description,
-                report, soc2_score, gdpr_score, hipaa_score, pci_score,
-                critical_issues, moderate_issues, low_issues, recommendations, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                str(uuid.uuid4()),
-                user_id,
-                file_name,
-                project_name,
-                industry,
-                description,
-                report,
-                scores.get("soc2_score"),
-                scores.get("gdpr_score"),
-                scores.get("hipaa_score"),
-                scores.get("pci_score"),
-                scores.get("critical_issues"),
-                scores.get("moderate_issues"),
-                scores.get("low_issues"),
-                scores.get("recommendations"),
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        db.commit()
-    finally:
-        db.close()
-
-
 @app.post("/analyze-project")
 async def analyze_project(
     req: AnalysisRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Download the file from Supabase Storage, run Cohere LLM analysis,
+    then save the report to Supabase Postgres.
+    """
     try:
-        # filePath is the absolute stored_path returned by /upload-file
-        if not req.filePath or not os.path.exists(req.filePath):
-            raise HTTPException(status_code=400, detail="File not found on server. Please upload first.")
+        # 1. Download file bytes from Supabase Storage
+        try:
+            file_bytes = get_file_bytes_from_storage(supabase_admin, req.storagePath)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not retrieve file from storage: {exc}"
+            )
 
-        content = read_file_content(req.filePath)
+        # 2. Extract text
+        ext = os.path.splitext(req.fileName)[1]
+        try:
+            content = read_file_content_from_bytes(file_bytes, ext)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         if not content.strip():
             raise HTTPException(status_code=400, detail="Could not extract content from file.")
 
+        # 3. Run LLM
         report = compliance_chain.invoke({"input": content}).content
         scores = parse_scores_and_recommendations(report)
 
-        save_report(
+        # 4. Save to Supabase Postgres
+        save_report_to_supabase(
+            supabase=supabase_admin,
             user_id=current_user["user_id"],
-            file_name=os.path.basename(req.filePath),
+            file_name=req.fileName,
+            storage_path=req.storagePath,
             project_name=req.projectName,
             industry=req.industry,
             description=req.description,
@@ -416,30 +234,6 @@ async def analyze_project(
 
 
 # ─────────────────────────────────────────────
-# Reports endpoint
-# ─────────────────────────────────────────────
-@app.get("/reports")
-def get_reports(current_user: dict = Depends(get_current_user)):
-    """Return compliance reports for the logged-in user, newest first."""
-    db = get_db()
-    try:
-        rows = db.execute(
-            """SELECT id, file_name, project_name, industry, description,
-                      report, soc2_score, gdpr_score, hipaa_score, pci_score,
-                      critical_issues, moderate_issues, low_issues,
-                      recommendations, created_at
-               FROM compliance_reports
-               WHERE user_id = ?
-               ORDER BY created_at DESC
-               LIMIT 20""",
-            (current_user["user_id"],),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        db.close()
-
-
-# ─────────────────────────────────────────────
 # Chat endpoint
 # ─────────────────────────────────────────────
 @app.post("/chat")
@@ -449,22 +243,20 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
         system_context = ""
 
         if req.report_id:
-            db = get_db()
-            try:
-                row = db.execute(
-                    """SELECT project_name, industry, description, report,
-                              soc2_score, gdpr_score, hipaa_score, pci_score,
-                              critical_issues, moderate_issues, low_issues,
-                              recommendations, file_name, created_at
-                       FROM compliance_reports
-                       WHERE id = ? AND user_id = ?""",
-                    (req.report_id, current_user["user_id"]),
-                ).fetchone()
-            finally:
-                db.close()
-
-            if row:
-                r = dict(row)
+            result = (
+                supabase_admin.table("compliance_reports")
+                .select(
+                    "project_name,industry,description,report,soc2_score,gdpr_score,"
+                    "hipaa_score,pci_score,critical_issues,moderate_issues,low_issues,"
+                    "recommendations,file_name,created_at"
+                )
+                .eq("id", req.report_id)
+                .eq("user_id", current_user["user_id"])
+                .single()
+                .execute()
+            )
+            r = result.data
+            if r:
                 system_context = f"""You are an AI Compliance Analyst assistant with full access to the user's compliance report.
 
 DOCUMENT CONTEXT:
@@ -589,13 +381,11 @@ async def get_compliance_news(
             detail="News API key not configured. Please add NEWS_API_KEY to the backend .env file."
         )
 
-    # Build a rich compliance search query
     base_query = (
         '(GDPR OR HIPAA OR "SOC 2" OR "PCI DSS" OR "ISO 27001" OR CCPA OR CPRA OR compliance OR '
         '"data protection" OR "data breach" OR "privacy regulation" OR "cybersecurity regulation")'
     )
 
-    # Add region filter to query if specified
     region_map = {
         'United States': ' AND (US OR USA OR "United States" OR California OR federal)',
         'European Union': ' AND (EU OR Europe OR European OR GDPR)',
@@ -605,7 +395,6 @@ async def get_compliance_news(
     if region in region_map:
         base_query += region_map[region]
 
-    # Add framework filter
     framework_map = {
         'GDPR': 'GDPR OR "data protection" OR EDPB',
         'HIPAA': 'HIPAA OR "health data" OR PHI',
@@ -651,7 +440,6 @@ async def get_compliance_news(
         url = article.get('url', '')
         url_to_image = article.get('urlToImage', '')
 
-        # Skip articles with removed/empty titles
         if not title or title == '[Removed]':
             continue
 

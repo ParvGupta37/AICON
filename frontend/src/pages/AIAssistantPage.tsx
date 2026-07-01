@@ -25,13 +25,26 @@ import {
   FileCheck2,
   CheckCircle2
 } from 'lucide-react';
-import { getCurrentUser, apiFetch } from '../lib/apiClient';
+import { apiFetch, reportsApi } from '../lib/apiClient';
+import { supabase } from '../lib/supabaseClients';
 
 function AIAssistantPage() {
   const navigate = useNavigate();
-  const currentUser = getCurrentUser();
+  const [currentUser, setCurrentUser] = useState<{ id: string; email: string; full_name: string } | null>(null);
   const userDisplayName = currentUser?.full_name || 'User';
   const userEmail = currentUser?.email || 'user@example.com';
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setCurrentUser({
+          id: user.id,
+          email: user.email ?? '',
+          full_name: (user.user_metadata?.full_name as string) ?? '',
+        });
+      }
+    });
+  }, []);
   const [activeTab, setActiveTab] = useState('AI Compliance Assistant');
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -51,16 +64,18 @@ function AIAssistantPage() {
 
   const activeReport = reports.find(r => r.id === activeReportId) || null;
 
-  // Load user's reports on mount
+  // Load user's reports on mount from Supabase directly
   useEffect(() => {
-    apiFetch('/reports')
+    reportsApi.getReports()
       .then((data: any[]) => {
         setReports(data || []);
         if (data && data.length > 0) {
           setActiveReportId(data[0].id); // auto-select latest
         }
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.error('Error fetching reports:', err);
+      })
       .finally(() => setLoadingReports(false));
   }, []);
 
@@ -165,7 +180,7 @@ function AIAssistantPage() {
     setMessage('');
 
     try {
-      const user = getCurrentUser();
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated. Please log in again.');
 
       // Include the active report ID so the backend injects document context

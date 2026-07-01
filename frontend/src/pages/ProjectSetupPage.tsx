@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Upload, FileText, ChevronDown, AlertCircle } from 'lucide-react';
-import { getCurrentUser, storageApi, apiFetch } from '../lib/apiClient';
+import { getCurrentUserAsync, storageApi, apiFetch } from '../lib/apiClient';
 
 function ProjectSetupPage() {
   const navigate = useNavigate();
@@ -16,7 +16,7 @@ function ProjectSetupPage() {
     projectName: '',
     industry: '',
     description: '',
-    files: [] as { name: string; path: string }[]
+    files: [] as { name: string; storagePath: string }[]
   });
 
   const industries = [
@@ -55,18 +55,19 @@ function ProjectSetupPage() {
     setUploadError('');
     setBackendError('');
 
-    const user = getCurrentUser();
+    const user = await getCurrentUserAsync();
     if (!user) {
       setUploadError('User not authenticated. Please log in again.');
       setIsLoading(false);
       return;
     }
-    const uploadedFiles: { name: string; path: string }[] = [];
+    const uploadedFiles: { name: string; storagePath: string }[] = [];
 
     for (const file of files) {
       try {
+        // Upload directly to Supabase Storage
         const result = await storageApi.uploadFile(file);
-        uploadedFiles.push({ name: result.original_name, path: result.stored_path });
+        uploadedFiles.push({ name: result.fileName, storagePath: result.storagePath });
       } catch (err: any) {
         console.error('File upload error:', err);
         setUploadError(`Failed to upload ${file.name}: ${err.message}`);
@@ -95,8 +96,8 @@ function ProjectSetupPage() {
 
     try {
 
-      // Get current user from localStorage session
-      const user = getCurrentUser();
+      // Get current user from Supabase session
+      const user = await getCurrentUserAsync();
       if (!user) {
         setBackendError('User not authenticated. Please log in again.');
         setIsLoading(false);
@@ -104,12 +105,13 @@ function ProjectSetupPage() {
       }
 
       // Prepare data to send to FastAPI backend
+      const firstFile = formData.files.length > 0 ? formData.files[0] : null;
       const payload = {
         projectName: formData.projectName,
         industry: formData.industry,
         description: formData.description,
-        filePath: formData.files.length > 0 ? formData.files[0].path : null,
-        user_id: user.id,
+        storagePath: firstFile?.storagePath ?? '',
+        fileName: firstFile?.name ?? 'document',
       };
 
       console.log('Sending payload:', payload);
