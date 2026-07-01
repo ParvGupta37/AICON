@@ -1,0 +1,33 @@
+# Environment variables
+.env
+.env.*
+
+# Databases
+*.db
+*.sqlite3
+aicon.db
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Uploaded user files
+AICON Backend/uploads/
+
+# Or, more generally:
+uploads/

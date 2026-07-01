@@ -1,0 +1,9 @@
+AICON Security and Privacy Policy Document
+=========================================
+This document outlines our compliance practices.
+- Encryption: We encrypt all data at rest using AES-256 and transit using TLS 1.3.
+- Access Control: All administrative access requires MFA.
+- Backups: Data is backed up daily and stored in multiple availability zones.
+- HIPAA: We do not process Protected Health Information (PHI) and do not have a BAA.
+- PCI DSS: Credit card payments are handled securely via Stripe, but we do not store raw card numbers.
+- GDPR: Users can request deletion of their data at any time via support email.
