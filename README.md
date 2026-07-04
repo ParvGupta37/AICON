@@ -185,13 +185,21 @@ In short, AICON turns unstructured compliance documentation into actionable inte
 
 # Screenshots
 
+## Landing Page
+
 <img width="1600" height="951" alt="image" src="https://github.com/user-attachments/assets/e918eb29-63d0-4373-90c4-0ee53e63f19c" />
+
+## Dashboard
 
 <img width="1600" height="951" alt="image" src="https://github.com/user-attachments/assets/d839a096-99a0-43ca-9eb9-a2c5e208a59f" />
 
-<img width="1600" height="1269" alt="image" src="https://github.com/user-attachments/assets/30bdec8f-1d5d-4db8-bf16-e47e8c6d12e2" />
-
+## Alerts and Recommendations
 <img width="1600" height="953" alt="image" src="https://github.com/user-attachments/assets/3a681f64-ae1b-4fb8-be86-5cb6b8f31cc7" />
+
+
+## Compliance Report
+
+<img width="1600" height="1269" alt="image" src="https://github.com/user-attachments/assets/30bdec8f-1d5d-4db8-bf16-e47e8c6d12e2" />
 
 
 ---
